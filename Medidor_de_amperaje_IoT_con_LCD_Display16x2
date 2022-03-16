@@ -1,0 +1,308 @@
+//***************************************
+//*************LIBRERIAS*****************
+//***************************************
+#include <Arduino.h>
+#include "Adafruit_MQTT.h"
+#include "Adafruit_MQTT_Client.h"
+#include <WiFi.h>
+#include "Adafruit_ADS1015.h"
+#include <LiquidCrystal_I2C.h>
+#include <Wire.h>
+
+//***************************************
+//********CONFIGURACION WIFI*************
+//***************************************
+//°°°°°°°°°CREDENCIALES WIFI°°°°°°°°°°°°°
+#define WLAN_SSID   "FERGUI"
+#define WLAN_PASS   "Arduinouno"
+
+//***************************************
+//********CONFIGURACION BROKER***********
+//***************************************
+#define HOST        "broker.mqttdashboard.com"
+#define PORT        1883
+#define USERNAME    "Arduinouno"
+#define PASSWORD    "Arduinouno"
+//°°°°°TIEMPO DE ESPERA DE CONEXION°°°°°°°
+const uint32_t TiempoEsperaWifi = 5000;
+const int timeout = 200;
+
+//***************************************
+//******DEFINICIONES MQTT*****************
+//***************************************
+WiFiClient client;
+Adafruit_MQTT_Client mqtt(&client, HOST, PORT, USERNAME, PASSWORD);
+//°°°°°°DEFINIR TOPIC°°°°°°°°°°°°°°°°°°°°°
+Adafruit_MQTT_Publish linea_a = Adafruit_MQTT_Publish(&mqtt, "linea/1");
+Adafruit_MQTT_Publish linea_b = Adafruit_MQTT_Publish(&mqtt, "linea/2");
+Adafruit_MQTT_Publish linea_c = Adafruit_MQTT_Publish(&mqtt, "linea/3");
+
+//***************************************
+//******CONFIGURACION DISPLAY************
+//***************************************
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+//***************************************
+//******CONFIGURACION ADS PARA I2C*******
+//***************************************
+Adafruit_ADS1115 ads_0 (0x49);
+Adafruit_ADS1115 ads_1 (0x48);
+//°°°°°°FACTOR DE GANANCIA°°°°°°°°°°°°°°
+const float FACTOR = 100; //100 AMP/50mA
+const float multiplier = 0.05F;
+
+//***************************************
+//*****DEFINIR MULTITAREAS***************
+//***************************************
+void MQTT_connect();
+void ImprimirMedidasA(String prefixA, float valueA, String postfixA);
+void ImprimirMedidasB(String prefixB, float valueB, String postfixB);
+void ImprimirMedidasC(String prefixC, float valueC, String postfixC);
+void ImprimirDato(String Dato);
+
+//***************************************
+//*******CONFIGURACIONES GENERALE********
+//***************************************
+void setup() {
+  delay(1);
+  WiFi.mode(WIFI_STA);
+  Serial.begin(9600);
+  Wire.begin();
+  Serial.print("Connecting to ");
+  Serial.println(WLAN_SSID);
+
+  WiFi.begin(WLAN_SSID, WLAN_PASS);
+  int i = 0;
+  for (; i < timeout; i++)
+  {
+    if (WiFi.status() == WL_CONNECTED) break;
+    delay(100);
+    Serial.print(".");
+  }
+  if (i == timeout)
+    Serial.println("No Conectado");
+
+  Serial.println("IP address: "); Serial.println(WiFi.localIP());
+
+  MQTT_connect();
+
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Iniciando...");
+  lcd.setCursor(1, 0);
+  lcd.print("Motor 1 ");
+
+  ads_0.setGain(GAIN_TWO);        // ±2.048V  1 bit = 0.0625mV
+  ads_1.setGain(GAIN_TWO);        // ±2.048V  1 bit = 0.0625mV
+  ads_0.begin();
+  ads_1.begin();
+
+  pinMode(17, OUTPUT);
+  pinMode(18, OUTPUT);
+  pinMode(19, OUTPUT);
+
+}
+
+//***************************************
+//*****DEFINIR VARIABLES FUNCIONALES*****
+//***************************************
+float cA;
+float cB;
+float cC;
+
+//***************************************
+//****DEFINIR VARIABLES DE LECTURA*******
+//***************************************
+float getCorrienteA()
+{
+  float Volt_diferencialA;
+  float corrienteA;
+  float sumA = 0;
+  long tiempoA = millis();
+  int counterA = 0;
+
+
+  while (millis() - tiempoA < 1000)
+  {
+    Volt_diferencialA = ads_0.readADC_Differential_0_1 ()  * multiplier;
+
+    corrienteA = Volt_diferencialA * FACTOR;
+    corrienteA /= 1000.0;
+
+    sumA += sq(corrienteA);
+    counterA = counterA + 1;
+  }
+
+  corrienteA = sqrt(sumA / counterA);
+  return (corrienteA);
+
+}
+float getCorrienteB()
+{
+  float Volt_diferencialB;
+  float corrienteB;
+  float sumB = 0;
+  long tiempoB = millis();
+  int counterB = 0;
+
+
+  while (millis() - tiempoB < 1000)
+  {
+    Volt_diferencialB = ads_0.readADC_Differential_2_3() * multiplier;
+
+    corrienteB = Volt_diferencialB * FACTOR;
+    corrienteB /= 1000.0;
+    sumB += sq(corrienteB);
+    counterB = counterB + 1;
+  }
+  corrienteB = sqrt(sumB / counterB);
+  return (corrienteB);
+}
+float getCorrienteC()
+{
+  float Volt_diferencialC;
+  float corrienteC;
+  float sumC = 0;
+  long tiempoC = millis();
+  int counterC = 0;
+
+
+  while (millis() - tiempoC < 1000)
+  {
+    Volt_diferencialC = ads_1.readADC_Differential_0_1() * multiplier;
+
+    corrienteC = Volt_diferencialC * FACTOR;
+    corrienteC /= 1000.0;
+    sumC += sq(corrienteC);
+    counterC = counterC + 1;
+  }
+  corrienteC = sqrt(sumC / counterC);
+  return (corrienteC);
+}
+
+//***************************************
+//*****CONFIGURACIONES EN LOOP***********
+//***************************************
+void loop() {
+  linea_a.publish(cA);
+  delay(1);
+  linea_b.publish(cB);
+  delay(1);
+  linea_c.publish(cC);
+  
+  float CorrienteRMSC = getCorrienteC();
+  float CorrienteRMSB = getCorrienteB();
+  float CorrienteRMSA = getCorrienteA();
+  
+  ImprimirMedidasA("L1:", CorrienteRMSA, "A");
+  ImprimirMedidasB("L2:", CorrienteRMSB, "A");
+  ImprimirMedidasC("L3:", CorrienteRMSC, "A");
+  ImprimirDato("MOTOR 1");
+
+  if ( cA <= 2.5) {
+    digitalWrite(17, LOW);
+  }
+  else {
+    digitalWrite(17, HIGH);
+  }
+  if ( cB <= 2.5) {
+    digitalWrite(18, LOW);
+  }
+  else {
+    digitalWrite(18, HIGH);
+  }
+  if ( cC <= 2.5) {
+    digitalWrite(19, LOW);
+  }
+  else {
+    digitalWrite(19, HIGH);
+  }
+}
+
+//***************************************
+//*****TAREA MQTT- CONERTAR AL BROKER****
+//***************************************
+void MQTT_connect() {
+  int8_t ret;
+  if (mqtt.connected()) {
+    return;
+  }
+
+  Serial.print("Connecting to MQTT... ");
+  uint8_t retries = 10;
+  while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
+    Serial.println(mqtt.connectErrorString(ret));
+    Serial.println("Retrying MQTT connection in 1 second...");
+    mqtt.disconnect();
+    delay(1000);
+    retries--;
+    if (retries == 0)
+      Serial.println("No Conectado");
+  }
+  Serial.println("MQTT Connected!");
+}
+
+//***************************************
+//*****TAREA IMPRIMIR MEDIADAS DE********
+//*****LECTURA LINEA 1*******************
+//***************************************
+void ImprimirMedidasA(String prefixA, float valueA, String postfixA)
+{
+  Serial.print(prefixA);
+  Serial.print(valueA, 2);
+  Serial.println(postfixA);
+
+  lcd.setCursor(0, 0);
+  lcd.print(prefixA);
+  lcd.print(valueA, 2);
+  lcd.print(postfixA);
+  cA = valueA;
+}
+
+//***************************************
+//*****TAREA IMPRIMIR MEDIADAS DE********
+//*****LECTURA LINEA 2*******************
+//***************************************
+void ImprimirMedidasB(String prefixB, float valueB, String postfixB)
+{
+  Serial.print(prefixB);
+  Serial.print(valueB, 2);
+  Serial.println(postfixB);
+
+  lcd.setCursor(9, 0);
+  lcd.print(prefixB);
+  lcd.print(valueB, 2);
+  lcd.print(postfixB);
+
+  cB = valueB;
+
+}
+
+//***************************************
+//*****TAREA IMPRIMIR MEDIADAS DE********
+//*****LECTURA LINEA 3*******************
+//***************************************
+void ImprimirMedidasC(String prefixC, float valueC, String postfixC)
+{
+  Serial.print(prefixC);
+  Serial.print(valueC, 2);
+  Serial.println(postfixC);
+
+  lcd.setCursor(0, 1);
+  lcd.print(prefixC);
+  lcd.print(valueC, 2);
+  lcd.print(postfixC);
+
+  cC = valueC;
+
+}
+
+//***************************************
+//*****TAREA IMPRIMIR TEXTO EDITABLE*****
+//****************************************
+void  ImprimirDato(String Dato)
+{
+  lcd.setCursor(9, 1);
+  lcd.print(Dato);
+}
